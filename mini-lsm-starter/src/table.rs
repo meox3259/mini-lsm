@@ -145,10 +145,6 @@ impl SsTable {
         }
     }
 
-    pub fn within_key(&self, key: &[u8]) -> bool {
-        self.first_key() <= key && key <= self.last_key()
-    }
-
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
         unimplemented!()
