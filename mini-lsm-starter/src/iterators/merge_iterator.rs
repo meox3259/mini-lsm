@@ -68,7 +68,6 @@ impl<I: StorageIterator> MergeIterator<I> {
         }
 
         let mut heap = BinaryHeap::new();
-        println!("iters.len() = {}", iters.len());
         if iters.iter().all(|x| !x.is_valid()) {
             let mut iters = iters;
             return Self {
@@ -77,15 +76,13 @@ impl<I: StorageIterator> MergeIterator<I> {
             };
         }
 
-        println!("bp1");
         for (i, iter) in iters.into_iter().enumerate() {
             if iter.is_valid() {
                 heap.push(HeapWrapper(i, iter));
             }
         }
-        println!("bp2");
+
         let current = heap.pop().unwrap();
-        println!("bp3");
         return Self {
             iters: heap,
             current: Some(current),

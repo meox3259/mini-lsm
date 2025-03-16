@@ -14,7 +14,6 @@
 
 use std::{ops::Bound, sync::Arc};
 
-use crate::key::KeySlice;
 use bytes::Bytes;
 use tempfile::tempdir;
 
@@ -31,37 +30,17 @@ use super::harness::{check_iter_result_by_key, expect_iter_error, MockIterator};
 #[test]
 fn test_task1_memtable_iter() {
     use std::ops::Bound;
-    println!("start create");
     let memtable = MemTable::create(0);
-    println!("start put");
     memtable.for_testing_put_slice(b"key1", b"value1").unwrap();
-    println!("finish put 1");
     memtable.for_testing_put_slice(b"key2", b"value2").unwrap();
     memtable.for_testing_put_slice(b"key3", b"value3").unwrap();
 
     {
-        println!("test_task1_memtable_iter 998244353333333333");
         let mut iter = memtable.for_testing_scan_slice(Bound::Unbounded, Bound::Unbounded);
-        let mut value = std::str::from_utf8(iter.value()).unwrap();
-        println!(
-            "iter.key() = {}, iter.value() = {}",
-            std::str::from_utf8(iter.key().for_testing_key_ref()).unwrap(),
-            value
-        );
         assert_eq!(iter.key().for_testing_key_ref(), b"key1");
-        println!("000");
         assert_eq!(iter.value(), b"value1");
-        println!("111");
-        println!("iter.is_valid() = {}", iter.is_valid());
         assert!(iter.is_valid());
-        println!("222");
         iter.next().unwrap();
-        value = std::str::from_utf8(iter.value()).unwrap();
-        println!(
-            "iter.key() = {}, iter.value() = {}",
-            std::str::from_utf8(iter.key().for_testing_key_ref()).unwrap(),
-            value
-        );
         assert_eq!(iter.key().for_testing_key_ref(), b"key2");
         assert_eq!(iter.value(), b"value2");
         assert!(iter.is_valid());
@@ -72,7 +51,7 @@ fn test_task1_memtable_iter() {
         iter.next().unwrap();
         assert!(!iter.is_valid());
     }
-    println!("test_task1_memtable_iter finished1");
+
     {
         let mut iter =
             memtable.for_testing_scan_slice(Bound::Included(b"key1"), Bound::Included(b"key2"));
@@ -202,14 +181,13 @@ fn test_task2_merge_2() {
         (Bytes::from("j"), Bytes::from("3.3")),
         (Bytes::from("k"), Bytes::from("4.3")),
     ];
-    println!("start create");
+
     let mut iter = MergeIterator::create(vec![
         Box::new(i1.clone()),
         Box::new(i2.clone()),
         Box::new(i3.clone()),
         Box::new(i4.clone()),
     ]);
-    println!("start check");
     check_iter_result_by_key(&mut iter, result.clone());
 
     let mut iter = MergeIterator::create(vec![
@@ -311,13 +289,16 @@ fn test_task4_integration() {
     storage
         .force_freeze_memtable(&storage.state_lock.lock())
         .unwrap();
+    println!("ckpt1");
     storage.delete(b"1").unwrap();
     storage.delete(b"2").unwrap();
+    println!("ckpt2");
     storage.put(b"3", b"2333").unwrap();
     storage.put(b"4", b"23333").unwrap();
     storage
         .force_freeze_memtable(&storage.state_lock.lock())
         .unwrap();
+    println!("ckpt3");
     storage.put(b"1", b"233333").unwrap();
     storage.put(b"3", b"233333").unwrap();
     {
@@ -336,6 +317,7 @@ fn test_task4_integration() {
         iter.next().unwrap();
         assert!(!iter.is_valid());
     }
+    println!("test1");
     {
         let mut iter = storage
             .scan(Bound::Included(b"2"), Bound::Included(b"3"))

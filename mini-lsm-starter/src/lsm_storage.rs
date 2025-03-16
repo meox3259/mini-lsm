@@ -429,7 +429,7 @@ impl LsmStorageInner {
         let mut iters = Vec::with_capacity(snapshot.imm_memtables.len() + 1);
         iters.push(Box::new(snapshot.memtable.scan(_lower, _upper)));
         for memtable in snapshot.imm_memtables.iter() {
-            iters.push(Box::new(snapshot.memtable.scan(_lower, _upper)));
+            iters.push(Box::new(memtable.scan(_lower, _upper)));
         }
         let iter = MergeIterator::create(iters);
         Ok(FusedIterator::new(LsmIterator::new(iter)?))
