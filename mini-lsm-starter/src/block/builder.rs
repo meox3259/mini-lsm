@@ -19,6 +19,7 @@ use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
+use bytes::{Buf, BufMut, Bytes};
 use super::{SIZEOF_U16};
 
 /// Builds a block.
@@ -56,9 +57,9 @@ impl BlockBuilder {
         }
         self.offsets.push(self.data.len() as u16);
         self.data.put_u16(key.len() as u16);
-        self.data.push(key);
+        self.data.put(key.raw_ref());
         self.data.put_u16(value.len() as u16);
-        self.data.push(value);
+        self.data.put(value);
         true
     }
 

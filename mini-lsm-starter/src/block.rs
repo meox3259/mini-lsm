@@ -19,7 +19,7 @@ mod builder;
 mod iterator;
 
 pub use builder::BlockBuilder;
-use bytes::{BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes};
 pub use iterator::BlockIterator;
 
 pub(crate) const SIZEOF_U16: usize = std::mem::size_of::<u16>();
@@ -51,9 +51,10 @@ impl Block {
         let num_of_elements = (&data[data.len() - SIZEOF_U16..]).get_u16() as usize;
         let data_end = data.len() - SIZEOF_U16 - num_of_elements * SIZEOF_U16;
         let offsets_raw = &data[data_end..data.len() - SIZEOF_U16];
-        let offset: Vec<u16> = offsets_raw.chunks(SIZEOF_U16).map(|x| x.get_u16()).collect();
+        let offset: Vec<u16> = offsets_raw.chunks(SIZEOF_U16).map(|mut x| x.get_u16()).collect();
         Self {
-
+            data: data[..data_end].to_vec(),
+            offsets: offset,
         }
     }
 }
