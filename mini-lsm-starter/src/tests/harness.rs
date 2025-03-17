@@ -164,13 +164,7 @@ where
     I: for<'a> StorageIterator<KeyType<'a> = &'a [u8]>,
 {
     for (k, v) in expected {
-        println!("iter.is_valid() = {}", iter.is_valid());
         assert!(iter.is_valid());
-        println!(
-            "iter.key() = {}, iter.value() = {}",
-            std::str::from_utf8(iter.key()).unwrap(),
-            std::str::from_utf8(iter.value()).unwrap()
-        );
         assert_eq!(
             k,
             iter.key(),

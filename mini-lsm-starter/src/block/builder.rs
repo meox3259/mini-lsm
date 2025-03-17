@@ -19,6 +19,8 @@ use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
+use super::{SIZEOF_U16};
+
 /// Builds a block.
 pub struct BlockBuilder {
     /// Offsets of each key-value entries.
@@ -34,22 +36,42 @@ pub struct BlockBuilder {
 impl BlockBuilder {
     /// Creates a new block builder.
     pub fn new(block_size: usize) -> Self {
-        unimplemented!()
+        Self {
+            offsets: Vec::new(),
+            data: Vec::new(),
+            block_size: block_size,
+            first_key: KeyVec::new(),
+        }
+    }
+
+    pub fn estimated_size(&self) -> usize {
+        size_of::<u16>() + self.data.len() + size_of::<u16>() * self.offsets.len()
     }
 
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        unimplemented!()
+        if self.estimated_size() + key.len() + value.len() + size_of::<u16>() * 3 > self.block_size && !self.is_empty() {
+            return false;
+        }
+        self.offsets.push(self.data.len() as u16);
+        self.data.put_u16(key.len() as u16);
+        self.data.push(key);
+        self.data.put_u16(value.len() as u16);
+        self.data.push(value);
+        true
     }
 
     /// Check if there is no key-value pair in the block.
     pub fn is_empty(&self) -> bool {
-        unimplemented!()
+        self.offsets.is_empty() && self.data.is_empty()
     }
 
     /// Finalize the block.
     pub fn build(self) -> Block {
-        unimplemented!()
+        Block {
+            data: self.data,
+            offsets: self.offsets,
+        }
     }
 }

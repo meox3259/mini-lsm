@@ -48,7 +48,13 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first entry.
     pub fn create_and_seek_to_first(block: Arc<Block>) -> Self {
-        unimplemented!()
+        Self {
+            block: block,
+            key: KeyVec::new(),
+            value_range: (0, 0),
+            idx: 0,
+            first_key: KeyVec::new(),
+        }
     }
 
     /// Creates a block iterator and seek to the first key that >= `key`.
