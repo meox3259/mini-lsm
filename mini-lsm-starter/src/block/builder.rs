@@ -19,8 +19,8 @@ use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
+use super::SIZEOF_U16;
 use bytes::{Buf, BufMut, Bytes};
-use super::{SIZEOF_U16};
 
 /// Builds a block.
 pub struct BlockBuilder {
@@ -52,7 +52,9 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        if self.estimated_size() + key.len() + value.len() + size_of::<u16>() * 3 > self.block_size && !self.is_empty() {
+        if self.estimated_size() + key.len() + value.len() + size_of::<u16>() * 3 > self.block_size
+            && !self.is_empty()
+        {
             return false;
         }
         self.offsets.push(self.data.len() as u16);

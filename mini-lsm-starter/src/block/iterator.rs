@@ -15,7 +15,9 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use bytes::Bytes;
 use std::sync::Arc;
+use std::{cmp::Ordering, str::from_utf8};
 
 use bytes::Buf;
 
@@ -50,18 +52,16 @@ impl BlockIterator {
 
     /// Creates a block iterator and seek to the first entry.
     pub fn create_and_seek_to_first(block: Arc<Block>) -> Self {
-        Self {
-            block: block,
-            key: KeyVec::new(),
-            value_range: (0, 0),
-            idx: 0,
-            first_key: KeyVec::new(),
-        }
+        let mut iter = Self::new(block);
+        iter.seek_to_first();
+        iter
     }
 
     /// Creates a block iterator and seek to the first key that >= `key`.
     pub fn create_and_seek_to_key(block: Arc<Block>, key: KeySlice) -> Self {
-        unimplemented!()
+        let mut iter = Self::new(block);
+        iter.seek_to_key(key);
+        iter
     }
 
     /// Returns the key of the current entry.
@@ -82,13 +82,18 @@ impl BlockIterator {
 
     /// Seeks to the first key in the block.
     pub fn seek_to_first(&mut self) {
-        unimplemented!()
+        self.seek_to(0);
     }
 
     pub fn seek_to(&mut self, idx: usize) {
+        if idx >= self.block.offsets.len() {
+            self.key.clear();
+            self.value_range = (0, 0);
+            return;
+        }
         let offset = self.block.offsets[idx] as usize;
+        self.seek_offset(offset);
         self.idx = idx;
-        self.key = self.block.data[offset..]
     }
 
     pub fn seek_offset(&mut self, offset: usize) {
@@ -98,21 +103,35 @@ impl BlockIterator {
         entry.advance(key_len);
         let value_len = entry.get_u16() as usize;
         let value = &entry[..value_len];
-        entry.advance(value_len);
         self.key.clear();
         self.key.append(key);
-        self.value_range = (offset + SIZEOF_U16 + key_len + SIZEOF_U16, offset + SIZEOF_U16 + key_len + SIZEOF_U16 + value_len);   
+        self.value_range = (
+            offset + SIZEOF_U16 + key_len + SIZEOF_U16,
+            offset + SIZEOF_U16 + key_len + SIZEOF_U16 + value_len,
+        );
     }
 
     /// Move to the next key in the block.
     pub fn next(&mut self) {
-        unimplemented!()
+        self.idx += 1;
+        self.seek_to(self.idx);
     }
 
     /// Seek to the first key that >= `key`.
     /// Note: You should assume the key-value pairs in the block are sorted when being added by
     /// callers.
     pub fn seek_to_key(&mut self, key: KeySlice) {
-        unimplemented!()
+        let mut left = 0;
+        let mut right = self.block.offsets.len();
+        while left < right {
+            let mid = left + (right - left) / 2;
+            self.seek_to(mid);
+            match self.key().cmp(&key) {
+                Ordering::Less => left = mid + 1,
+                Ordering::Equal => return,
+                Ordering::Greater => right = mid,
+            }
+        }
+        self.seek_to(left);
     }
 }

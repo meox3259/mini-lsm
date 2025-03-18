@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use nom::AsBytes;
 
 use crate::{
     block::{Block, BlockBuilder, BlockIterator},
