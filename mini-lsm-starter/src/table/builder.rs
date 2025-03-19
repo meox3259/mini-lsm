@@ -36,7 +36,14 @@ pub struct SsTableBuilder {
 impl SsTableBuilder {
     /// Create a builder based on target block size.
     pub fn new(block_size: usize) -> Self {
-        unimplemented!()
+        Self {
+            builder: BlockBuilder::new(block_size),
+            first_key: Vec::new(),
+            last_key: Vec::new(),
+            data: Vec::new(),
+            meta: Vec::new(),
+            block_size: block_size,
+        }
     }
 
     /// Adds a key-value pair to SSTable.
@@ -44,7 +51,24 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
-        unimplemented!()
+        if self.first_key.is_empty() {
+            self.first_key.clear();
+            self.first_key.extend(key.raw_ref());
+        }
+
+        if self.builder.add(key, value) {
+            self.last_key.clear();
+            self.last_key.extend(key.raw_ref());
+            return;
+        }
+
+        self.finish_block();
+
+        self.builder.add(key, value);
+        self.first_key.clear();
+        self.first_key.extend(key.raw_ref());
+        self.last_key.clear();
+        self.last_key.extend(key.raw_ref());
     }
 
     /// Get the estimated size of the SSTable.
