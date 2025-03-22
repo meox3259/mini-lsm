@@ -18,10 +18,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use bytes::BufMut;
+
+use crate::key::{KeySlice, KeyVec};
 use anyhow::Result;
 
-use super::{BlockMeta, SsTable};
-use crate::{block::BlockBuilder, key::KeySlice, lsm_storage::BlockCache};
+use super::{BlockMeta, FileObject, SsTable};
+use crate::{block::BlockBuilder, lsm_storage::BlockCache};
 
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
@@ -55,7 +58,6 @@ impl SsTableBuilder {
             self.first_key.clear();
             self.first_key.extend(key.raw_ref());
         }
-
         if self.builder.add(key, value) {
             self.last_key.clear();
             self.last_key.extend(key.raw_ref());
@@ -71,22 +73,58 @@ impl SsTableBuilder {
         self.last_key.extend(key.raw_ref());
     }
 
+    fn finish_block(&mut self) {
+        let builder = std::mem::replace(&mut self.builder, BlockBuilder::new(self.block_size));
+        let encoded_block = builder.build().encode();
+        let mut first_key = KeyVec::new();
+        first_key.append(self.first_key.as_ref());
+        let mut last_key = KeyVec::new();
+        last_key.append(self.last_key.as_ref());
+        self.first_key.clear();
+        self.last_key.clear();
+
+        self.meta.push(BlockMeta {
+            offset: self.data.len(),
+            first_key: std::mem::take(&mut first_key).into_key_bytes(),
+            last_key: std::mem::take(&mut last_key).into_key_bytes(),
+        });
+
+        self.data.extend(encoded_block);
+    }
+
     /// Get the estimated size of the SSTable.
     ///
     /// Since the data blocks contain much more data than meta blocks, just return the size of data
     /// blocks here.
     pub fn estimated_size(&self) -> usize {
-        unimplemented!()
+        self.data.len()
     }
 
     /// Builds the SSTable and writes it to the given path. Use the `FileObject` structure to manipulate the disk objects.
     pub fn build(
-        self,
+        mut self,
         id: usize,
         block_cache: Option<Arc<BlockCache>>,
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
-        unimplemented!()
+        self.finish_block();
+        let mut buf = self.data;
+        let meta_offset = buf.len();
+
+        BlockMeta::encode_block_meta(&self.meta, &mut buf);
+        buf.put_u32(meta_offset as u32);
+        let file = FileObject::create(path.as_ref(), buf)?;
+        Ok(SsTable {
+            file: file,
+            block_meta_offset: meta_offset,
+            id: id,
+            block_cache: block_cache,
+            first_key: self.meta.first().unwrap().first_key.clone(),
+            last_key: self.meta.last().unwrap().last_key.clone(),
+            block_meta: self.meta,
+            bloom: None,
+            max_ts: 0,
+        })
     }
 
     #[cfg(test)]

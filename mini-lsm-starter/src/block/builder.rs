@@ -19,8 +19,7 @@ use crate::key::{KeySlice, KeyVec};
 
 use super::Block;
 
-use super::SIZEOF_U16;
-use bytes::{Buf, BufMut, Bytes};
+use bytes::BufMut;
 
 /// Builds a block.
 pub struct BlockBuilder {

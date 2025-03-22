@@ -28,14 +28,13 @@ pub(crate) const SIZEOF_U32: usize = std::mem::size_of::<u32>();
 
 use anyhow::Result;
 pub use builder::SsTableBuilder;
-use bytes::Buf;
 pub use iterator::SsTableIterator;
 
 use crate::block::Block;
 use crate::key::{KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut};
 
 use self::bloom::Bloom;
 
@@ -158,7 +157,10 @@ impl SsTable {
         let len = file.size();
         let raw_block_meta_offset = file.read(len - 4, 4)?;
         let block_meta_offset = (&raw_block_meta_offset[..]).get_u32();
-        let raw_block_meta = file.read(block_meta_offset as u64, len - (block_meta_offset as u64) - 4)?;
+        let raw_block_meta = file.read(
+            block_meta_offset as u64,
+            len - (block_meta_offset as u64) - 4,
+        )?;
         let block_meta = BlockMeta::decode_block_meta(&raw_block_meta[..]);
 
         Ok(Self {
@@ -172,7 +174,6 @@ impl SsTable {
             block_meta: block_meta,
             max_ts: 0,
         })
-
     }
 
     /// Create a mock SST with only first key + last key metadata
@@ -197,16 +198,26 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        let block_meta = &self.block_meta[block_idx];
-        let block_offset = block_meta.offset as u64;
-        let block_next_offset = self.block_meta[block_idx + 1].offset as u64;
-        let data = self.file.read(block_offset as u64, block_next_offset - block_offset)?;
-        Ok(Arc::new(Block::decode(&data)))
+        let block_offset = self.block_meta[block_idx].offset as u64;
+        println!(
+            "block_idx: {:?}, block_offset: {:?}",
+            block_idx, block_offset
+        );
+        let block_next_offset = self
+            .block_meta
+            .get(block_idx + 1)
+            .map_or(self.block_meta_offset, |x| x.offset) as u64;
+        let data = self
+            .file
+            .read(block_offset as u64, block_next_offset - block_offset)?;
+        Ok(Arc::new(Block::decode(&data[..])))
     }
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
+        println!("read_block_cached: {:?}", block_idx);
         if let Some(block) = &self.block_cache {
+            println!("self.id: {:?}, block_idx: {:?}", self.id, block_idx);
             let blk = block.get(&(self.id, block_idx));
             if let Some(value) = blk {
                 return Ok(Arc::clone(&value));
@@ -214,6 +225,7 @@ impl SsTable {
                 return self.read_block(block_idx);
             }
         } else {
+            println!("read_block_cached111: {:?}", block_idx);
             return self.read_block(block_idx);
         }
     }
@@ -222,7 +234,17 @@ impl SsTable {
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
-        self.block_meta.partition_point(|meta| meta.last_key <= key).saturating_sub(1)
+        for block_meta in self.block_meta.iter() {
+            println!(
+                "fff block_meta: {:?}, key_slice: {:?}",
+                block_meta.first_key,
+                block_meta.first_key.as_key_slice()
+            );
+        }
+        println!("key: {:?}", key);
+        self.block_meta
+            .partition_point(|meta| meta.first_key.as_key_slice() <= key)
+            .saturating_sub(1)
     }
 
     /// Get number of data blocks.

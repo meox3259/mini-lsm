@@ -15,9 +15,8 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use bytes::Bytes;
+use std::cmp::Ordering;
 use std::sync::Arc;
-use std::{cmp::Ordering, str::from_utf8};
 
 use bytes::Buf;
 
