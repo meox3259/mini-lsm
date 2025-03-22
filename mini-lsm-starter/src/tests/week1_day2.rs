@@ -289,16 +289,13 @@ fn test_task4_integration() {
     storage
         .force_freeze_memtable(&storage.state_lock.lock())
         .unwrap();
-    println!("ckpt1");
     storage.delete(b"1").unwrap();
     storage.delete(b"2").unwrap();
-    println!("ckpt2");
     storage.put(b"3", b"2333").unwrap();
     storage.put(b"4", b"23333").unwrap();
     storage
         .force_freeze_memtable(&storage.state_lock.lock())
         .unwrap();
-    println!("ckpt3");
     storage.put(b"1", b"233333").unwrap();
     storage.put(b"3", b"233333").unwrap();
     {
@@ -317,7 +314,6 @@ fn test_task4_integration() {
         iter.next().unwrap();
         assert!(!iter.is_valid());
     }
-    println!("test1");
     {
         let mut iter = storage
             .scan(Bound::Included(b"2"), Bound::Included(b"3"))
