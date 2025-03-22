@@ -33,7 +33,10 @@ impl<
     > TwoMergeIterator<A, B>
 {
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        Ok(TwoMergeIterator {
+            a,
+            b,
+        })
     }
 }
 
@@ -45,7 +48,7 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        
     }
 
     fn value(&self) -> &[u8] {
