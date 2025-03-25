@@ -199,10 +199,6 @@ impl SsTable {
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
         let block_offset = self.block_meta[block_idx].offset as u64;
-        println!(
-            "block_idx: {:?}, block_offset: {:?}",
-            block_idx, block_offset
-        );
         let block_next_offset = self
             .block_meta
             .get(block_idx + 1)
@@ -215,17 +211,12 @@ impl SsTable {
 
     /// Read a block from disk, with block cache. (Day 4)
     pub fn read_block_cached(&self, block_idx: usize) -> Result<Arc<Block>> {
-        println!("read_block_cached: {:?}", block_idx);
-        if let Some(block) = &self.block_cache {
-            println!("self.id: {:?}, block_idx: {:?}", self.id, block_idx);
-            let blk = block.get(&(self.id, block_idx));
-            if let Some(value) = blk {
-                return Ok(Arc::clone(&value));
-            } else {
-                return self.read_block(block_idx);
-            }
+        if let Some(ref block_cache) = &self.block_cache {
+            let blk = block_cache
+                .try_get_with((self.id, block_idx), || self.read_block(block_idx))
+                .map_err(|e| anyhow::anyhow!("block_cache error: {:?}", e))?;
+            return Ok(blk);
         } else {
-            println!("read_block_cached111: {:?}", block_idx);
             return self.read_block(block_idx);
         }
     }
@@ -234,14 +225,6 @@ impl SsTable {
     /// Note: You may want to make use of the `first_key` stored in `BlockMeta`.
     /// You may also assume the key-value pairs stored in each consecutive block are sorted.
     pub fn find_block_idx(&self, key: KeySlice) -> usize {
-        for block_meta in self.block_meta.iter() {
-            println!(
-                "fff block_meta: {:?}, key_slice: {:?}",
-                block_meta.first_key,
-                block_meta.first_key.as_key_slice()
-            );
-        }
-        println!("key: {:?}", key);
         self.block_meta
             .partition_point(|meta| meta.first_key.as_key_slice() <= key)
             .saturating_sub(1)
