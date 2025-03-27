@@ -133,14 +133,10 @@ fn test_task1_storage_get() {
 
 #[test]
 fn test_task2_auto_flush() {
-    println!("000000000");
     let dir = tempdir().unwrap();
-    println!("111111111");
     let storage = MiniLsm::open(&dir, LsmStorageOptions::default_for_week1_day6_test()).unwrap();
-    println!("222222222");
     let value = "1".repeat(1024); // 1KB
-    println!("333333333");
-    // approximately 6MB
+                                  // approximately 6MB
     for i in 0..6000 {
         println!("put {}", i);
         storage

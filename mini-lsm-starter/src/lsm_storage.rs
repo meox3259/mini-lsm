@@ -365,6 +365,11 @@ impl LsmStorageInner {
         let mut iters = Vec::new();
         for sst in snapshot.l0_sstables.iter() {
             let table = snapshot.sstables.get(sst).unwrap();
+            if let Some(bloom_filter) = &table.bloom {
+                if !bloom_filter.may_contain(farmhash::fingerprint32(key.raw_ref())) {
+                    continue;
+                }
+            }
             if key_within(
                 key.raw_ref(),
                 table.first_key().raw_ref(),

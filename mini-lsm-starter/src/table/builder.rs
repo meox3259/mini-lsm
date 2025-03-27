@@ -23,7 +23,7 @@ use bytes::BufMut;
 use crate::key::{KeySlice, KeyVec};
 use anyhow::Result;
 
-use super::{BlockMeta, FileObject, SsTable};
+use super::{bloom::Bloom, BlockMeta, FileObject, SsTable};
 use crate::{block::BlockBuilder, lsm_storage::BlockCache};
 
 /// Builds an SSTable from key-value pairs.
@@ -32,6 +32,7 @@ pub struct SsTableBuilder {
     first_key: Vec<u8>,
     last_key: Vec<u8>,
     data: Vec<u8>,
+    key_hashes: Vec<u32>,
     pub(crate) meta: Vec<BlockMeta>,
     block_size: usize,
 }
@@ -44,6 +45,7 @@ impl SsTableBuilder {
             first_key: Vec::new(),
             last_key: Vec::new(),
             data: Vec::new(),
+            key_hashes: Vec::new(),
             meta: Vec::new(),
             block_size: block_size,
         }
@@ -54,6 +56,7 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
+        self.key_hashes.push(farmhash::fingerprint32(key.raw_ref()));
         if self.first_key.is_empty() {
             self.first_key.clear();
             self.first_key.extend(key.raw_ref());
@@ -65,7 +68,6 @@ impl SsTableBuilder {
         }
 
         self.finish_block();
-
         self.builder.add(key, value);
         self.first_key.clear();
         self.first_key.extend(key.raw_ref());
@@ -108,11 +110,21 @@ impl SsTableBuilder {
         path: impl AsRef<Path>,
     ) -> Result<SsTable> {
         self.finish_block();
+
         let mut buf = self.data;
         let meta_offset = buf.len();
 
         BlockMeta::encode_block_meta(&self.meta, &mut buf);
         buf.put_u32(meta_offset as u32);
+
+        let bloom = Bloom::build_from_key_hashes(
+            &self.key_hashes,
+            Bloom::bloom_bits_per_key(self.key_hashes.len(), 0.01),
+        );
+        let bloom_offset = buf.len();
+        bloom.encode(&mut buf);
+        buf.put_u32(bloom_offset as u32);
+
         let file = FileObject::create(path.as_ref(), buf)?;
         Ok(SsTable {
             file: file,
@@ -122,7 +134,7 @@ impl SsTableBuilder {
             first_key: self.meta.first().unwrap().first_key.clone(),
             last_key: self.meta.last().unwrap().last_key.clone(),
             block_meta: self.meta,
-            bloom: None,
+            bloom: Some(bloom),
             max_ts: 0,
         })
     }
