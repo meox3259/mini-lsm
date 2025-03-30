@@ -527,7 +527,12 @@ impl LsmStorageInner {
             let mut guard = self.state.write();
             let mut snapshot = guard.as_ref().clone();
             snapshot.imm_memtables.pop();
-            snapshot.l0_sstables.insert(0, sst_id);
+            // 如果配置了l0，则刷到l0，否则在level最上层插入一个层，只有当前一个sst
+            if self.compaction_controller.flush_to_l0() {
+                snapshot.l0_sstables.insert(0, sst_id);
+            } else {
+                snapshot.levels.insert(0, (sst_id, vec![sst_id]));
+            }
             snapshot.sstables.insert(sst_id, Arc::new(sst));
             *guard = Arc::new(snapshot);
         }
