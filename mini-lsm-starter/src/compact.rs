@@ -187,7 +187,6 @@ impl LsmStorageInner {
             let state = self.state.read();
             Arc::clone(&state)
         };
-        println!("2222222222222222222222222222222222");
         match _task {
             // l0和l1全部合并
             CompactionTask::ForceFullCompaction {
@@ -268,7 +267,6 @@ impl LsmStorageInner {
             },
 
             CompactionTask::Tiered(TieredCompactionTask { tiers, .. }) => {
-                println!("1111111111111111111111111111111111");
                 let mut iters = Vec::new();
                 for (_, ssts) in tiers.iter() {
                     let mut iters_sst = Vec::new();
@@ -342,16 +340,13 @@ impl LsmStorageInner {
     }
 
     fn trigger_compaction(&self) -> Result<()> {
-        println!("3333333333333333333333333333333333");
         let snapshot = {
             let state = self.state.read();
             state.clone()
         };
-        println!("5555555555555555555555555555555555");
         let task = self
             .compaction_controller
             .generate_compaction_task(&snapshot);
-        println!("4444444444444444444444444444444444");
         let Some(task) = task else {
             return Ok(());
         };
