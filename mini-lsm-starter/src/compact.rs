@@ -215,6 +215,57 @@ impl LsmStorageInner {
                 self.compact_iter_to_ssts(iter, _task.compact_to_bottom_level())
             }
 
+            CompactionTask::Leveled(LeveledCompactionTask {
+                upper_level,
+                upper_level_sst_ids,
+                lower_level: _,
+                lower_level_sst_ids,
+                ..
+            }) => match upper_level {
+                // l_i和l_i+1合并
+                Some(_) => {
+                    let mut iter_upper_ssts = Vec::new();
+                    for sst in upper_level_sst_ids.iter() {
+                        iter_upper_ssts.push(snapshot.sstables.get(sst).unwrap().clone());
+                    }
+
+                    let mut iter_lower_ssts = Vec::new();
+                    for sst in lower_level_sst_ids.iter() {
+                        iter_lower_ssts.push(snapshot.sstables.get(sst).unwrap().clone());
+                    }
+
+                    // 两个SstConcatIterator
+                    let iter = TwoMergeIterator::create(
+                        SstConcatIterator::create_and_seek_to_first(iter_upper_ssts)?,
+                        SstConcatIterator::create_and_seek_to_first(iter_lower_ssts)?,
+                    )?;
+                    self.compact_iter_to_ssts(iter, _task.compact_to_bottom_level())
+                }
+
+                None => {
+                    // 合并l0和l1
+                    let mut iter_upper_ssts = Vec::new();
+                    // l0层建立iterator
+                    for sst in upper_level_sst_ids.iter() {
+                        iter_upper_ssts.push(Box::new(SsTableIterator::create_and_seek_to_first(
+                            snapshot.sstables.get(sst).unwrap().clone(),
+                        )?));
+                    }
+
+                    let mut iter_lower_ssts = Vec::new();
+                    for sst in lower_level_sst_ids.iter() {
+                        iter_lower_ssts.push(snapshot.sstables.get(sst).unwrap().clone());
+                    }
+
+                    // l0的MergeIterator和l1的SstConcatIterator
+                    let iter = TwoMergeIterator::create(
+                        MergeIterator::create(iter_upper_ssts),
+                        SstConcatIterator::create_and_seek_to_first(iter_lower_ssts)?,
+                    )?;
+                    self.compact_iter_to_ssts(iter, _task.compact_to_bottom_level())
+                }
+            },
+
             CompactionTask::Simple(SimpleLeveledCompactionTask {
                 upper_level,
                 upper_level_sst_ids,
@@ -280,10 +331,6 @@ impl LsmStorageInner {
 
                 let iter = MergeIterator::create(iters);
                 self.compact_iter_to_ssts(iter, _task.compact_to_bottom_level())
-            }
-
-            _ => {
-                unimplemented!()
             }
         }
     }
