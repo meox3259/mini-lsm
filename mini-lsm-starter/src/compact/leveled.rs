@@ -132,7 +132,7 @@ impl LeveledCompactionController {
         let Some(prior) = priority.first() else {
             return None;
         };
-        println!("prior.0: {:?}", prior.0);
+
         let upper_level_sst = vec![_snapshot.levels[prior.0 - 1]
             .1
             .iter()
@@ -168,31 +168,25 @@ impl LeveledCompactionController {
         let mut file_to_remove = Vec::new();
 
         if let Some(upper_level) = _task.upper_level {
-            let new_upper_level_ssts = _snapshot.levels[upper_level - 1]
-                .1
-                .iter()
-                .filter_map(|x| {
-                    if marked_upper_ssts.remove(x) {
-                        None
-                    } else {
-                        Some(x.clone())
-                    }
-                })
-                .collect();
+            let mut new_upper_level_ssts = Vec::new();
+            for sst in _snapshot.levels[upper_level - 1].1.iter() {
+                if marked_upper_ssts.remove(sst) {
+                    file_to_remove.push(sst.clone());
+                } else {
+                    new_upper_level_ssts.push(sst.clone());
+                }
+            }
             assert!(marked_upper_ssts.is_empty());
             snapshot.levels[upper_level - 1].1 = new_upper_level_ssts;
         } else {
-            let new_l0_ssts = _snapshot
-                .l0_sstables
-                .iter()
-                .filter_map(|x| {
-                    if marked_upper_ssts.remove(x) {
-                        None
-                    } else {
-                        Some(x.clone())
-                    }
-                })
-                .collect();
+            let mut new_l0_ssts = Vec::new();
+            for sst in _snapshot.l0_sstables.iter() {
+                if marked_upper_ssts.remove(sst) {
+                    file_to_remove.push(sst.clone());
+                } else {
+                    new_l0_ssts.push(sst.clone());
+                }
+            }
             assert!(marked_upper_ssts.is_empty());
             snapshot.l0_sstables = new_l0_ssts;
         }
@@ -202,19 +196,14 @@ impl LeveledCompactionController {
             .iter()
             .copied()
             .collect::<HashSet<_>>();
-        let mut new_lower_level_ssts = _snapshot.levels[_task.lower_level - 1]
-            .1
-            .iter()
-            .filter_map(|x| {
-                if marked_lower_ssts.remove(x) {
-                    None
-                } else {
-                    Some(x.clone())
-                }
-            })
-            .collect::<Vec<_>>();
-        file_to_remove.extend(&_task.lower_level_sst_ids);
-        file_to_remove.extend(&_task.upper_level_sst_ids);
+        let mut new_lower_level_ssts = Vec::new();
+        for sst in _snapshot.levels[_task.lower_level - 1].1.iter() {
+            if marked_lower_ssts.remove(sst) {
+                file_to_remove.push(sst.clone());
+            } else {
+                new_lower_level_ssts.push(sst.clone());
+            }
+        }
         new_lower_level_ssts.extend(_output);
         new_lower_level_ssts.sort_by(|a, b| {
             _snapshot

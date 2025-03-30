@@ -89,7 +89,6 @@ impl SimpleLeveledCompactionController {
         _task: &SimpleLeveledCompactionTask,
         _output: &[usize],
     ) -> (LsmStorageState, Vec<usize>) {
-        println!("apply_compaction_result114514");
         let mut snapshot = _snapshot.clone();
         // 被删除的SST
         let mut files_to_remove = Vec::new();
