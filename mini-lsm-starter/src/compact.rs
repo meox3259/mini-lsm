@@ -19,6 +19,7 @@ mod leveled;
 mod simple_leveled;
 mod tiered;
 
+use crate::key::KeySlice;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -128,44 +129,13 @@ pub enum CompactionOptions {
 }
 
 impl LsmStorageInner {
-    fn compact(&self, _task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
-        let snapshot = {
-            let state = self.state.read();
-            state.clone()
-        };
-
-        let mut iter = match _task {
-            CompactionTask::ForceFullCompaction {
-                l0_sstables,
-                l1_sstables,
-            } => {
-                let mut iter_l0 = Vec::new();
-                for sst in l0_sstables.iter() {
-                    iter_l0.push(Box::new(SsTableIterator::create_and_seek_to_first(
-                        snapshot.sstables.get(sst).unwrap().clone(),
-                    )?));
-                }
-
-                let mut iter_l1 = Vec::new();
-                for sst in l1_sstables.iter() {
-                    iter_l1.push(snapshot.sstables.get(sst).unwrap().clone());
-                }
-
-                TwoMergeIterator::create(
-                    MergeIterator::create(iter_l0),
-                    SstConcatIterator::create_and_seek_to_first(iter_l1)?,
-                )?
-            }
-
-            _ => {
-                unimplemented!()
-            }
-        };
-
+    fn compact_iter_to_ssts(
+        &self,
+        mut iter: impl for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>,
+        compact_to_bottom_level: bool,
+    ) -> Result<Vec<Arc<SsTable>>> {
         let mut builder = None;
         let mut new_sst = Vec::new();
-
-        let compact_to_bottom_level = _task.compact_to_bottom_level();
 
         while iter.is_valid() {
             if builder.is_none() {
@@ -212,6 +182,96 @@ impl LsmStorageInner {
         Ok(new_sst)
     }
 
+    fn compact(&self, _task: &CompactionTask) -> Result<Vec<Arc<SsTable>>> {
+        let snapshot = {
+            let state = self.state.read();
+            Arc::clone(&state)
+        };
+
+        match _task {
+            // l0和l1全部合并
+            CompactionTask::ForceFullCompaction {
+                l0_sstables,
+                l1_sstables,
+            } => {
+                // 建立l0层的SsTableIterator
+                let mut iter_l0 = Vec::new();
+                for sst in l0_sstables.iter() {
+                    iter_l0.push(Box::new(SsTableIterator::create_and_seek_to_first(
+                        snapshot.sstables.get(sst).unwrap().clone(),
+                    )?));
+                }
+
+                // 建立l1层有序的SstConcatIterator
+                let mut iter_l1 = Vec::new();
+                for sst in l1_sstables.iter() {
+                    iter_l1.push(snapshot.sstables.get(sst).unwrap().clone());
+                }
+
+                // 合成一个Iterator
+                let iter = TwoMergeIterator::create(
+                    MergeIterator::create(iter_l0),
+                    SstConcatIterator::create_and_seek_to_first(iter_l1)?,
+                )?;
+                self.compact_iter_to_ssts(iter, _task.compact_to_bottom_level())
+            }
+
+            CompactionTask::Simple(SimpleLeveledCompactionTask {
+                upper_level,
+                upper_level_sst_ids,
+                lower_level: _,
+                lower_level_sst_ids,
+                ..
+            }) => match upper_level {
+                // l_i和l_i+1合并
+                Some(_) => {
+                    let mut iter_upper_ssts = Vec::new();
+                    for sst in upper_level_sst_ids.iter() {
+                        iter_upper_ssts.push(snapshot.sstables.get(sst).unwrap().clone());
+                    }
+
+                    let mut iter_lower_ssts = Vec::new();
+                    for sst in lower_level_sst_ids.iter() {
+                        iter_lower_ssts.push(snapshot.sstables.get(sst).unwrap().clone());
+                    }
+
+                    // 两个SstConcatIterator
+                    let iter = TwoMergeIterator::create(
+                        SstConcatIterator::create_and_seek_to_first(iter_upper_ssts)?,
+                        SstConcatIterator::create_and_seek_to_first(iter_lower_ssts)?,
+                    )?;
+                    self.compact_iter_to_ssts(iter, _task.compact_to_bottom_level())
+                }
+
+                None => {
+                    // 合并l0和l1
+                    let mut iter_upper_ssts = Vec::new();
+                    // l0层建立iterator
+                    for sst in upper_level_sst_ids.iter() {
+                        iter_upper_ssts.push(Box::new(SsTableIterator::create_and_seek_to_first(
+                            snapshot.sstables.get(sst).unwrap().clone(),
+                        )?));
+                    }
+
+                    let mut iter_lower_ssts = Vec::new();
+                    for sst in lower_level_sst_ids.iter() {
+                        iter_lower_ssts.push(snapshot.sstables.get(sst).unwrap().clone());
+                    }
+
+                    // l0的MergeIterator和l1的SstConcatIterator
+                    let iter = TwoMergeIterator::create(
+                        MergeIterator::create(iter_upper_ssts),
+                        SstConcatIterator::create_and_seek_to_first(iter_lower_ssts)?,
+                    )?;
+                    self.compact_iter_to_ssts(iter, _task.compact_to_bottom_level())
+                }
+            },
+            _ => {
+                unimplemented!()
+            }
+        }
+    }
+
     pub fn force_full_compaction(&self) -> Result<()> {
         let snapshot = {
             let state = self.state.read();
@@ -228,7 +288,7 @@ impl LsmStorageInner {
         let sstables = self.compact(&compaction_task)?;
         {
             let _state_lock = self.state_lock.lock();
-            let mut state = self.state.write().as_ref().clone();
+            let mut state = self.state.read().as_ref().clone();
 
             for id in l0_sstables.iter().chain(l1_sstables.iter()) {
                 state.sstables.remove(id);
@@ -257,14 +317,57 @@ impl LsmStorageInner {
 
         // 删除这些被compact的SST文件
         for sst in l0_sstables.iter().chain(l1_sstables.iter()) {
-            std::fs::remove_file(self.path_of_sst(*sst));
+            std::fs::remove_file(self.path_of_sst(*sst))?;
         }
 
         Ok(())
     }
 
     fn trigger_compaction(&self) -> Result<()> {
-        unimplemented!()
+        let snapshot = {
+            let state = self.state.read();
+            state.clone()
+        };
+
+        let task = self
+            .compaction_controller
+            .generate_compaction_task(&snapshot);
+        let Some(task) = task else {
+            return Ok(());
+        };
+        self.dump_structure();
+        // compact后生成的sst
+        let sstables = self.compact(&task)?;
+        // 新加入的sst_id
+        let output = sstables.iter().map(|sst| sst.sst_id()).collect::<Vec<_>>();
+        let ssts_to_remove = {
+            let _state_lock = self.state_lock.lock();
+            let mut snapshot = self.state.read().as_ref().clone();
+            // 里面把snapshot被compaction的两层清空，然后把compact后的id填入下层；返回的files_to_remove包含了被清空的两层的sst_id，用于把snapshot里存的sst指针和文件删除
+            for sst in sstables {
+                snapshot.sstables.insert(sst.sst_id(), sst);
+            }
+            let (mut snapshot, files_to_remove) = self
+                .compaction_controller
+                .apply_compaction_result(&snapshot, &task, &output, false);
+            let mut ssts_to_remove = Vec::new();
+            for file in files_to_remove {
+                let result = snapshot.sstables.remove(&file);
+                ssts_to_remove.push(result.unwrap());
+            }
+            // 把compact后的sst插入对应位置
+            let mut state = self.state.write();
+            *state = Arc::new(snapshot);
+            drop(state);
+            ssts_to_remove
+        };
+
+        // 删除被删除的sst文件
+        for sst in ssts_to_remove {
+            std::fs::remove_file(self.path_of_sst(sst.sst_id()))?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn spawn_compaction_thread(

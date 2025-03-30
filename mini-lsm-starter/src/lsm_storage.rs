@@ -343,8 +343,10 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        let guard = self.state.read();
-        let snapshot = &guard;
+        let snapshot = {
+            let guard = self.state.read();
+            Arc::clone(&guard)
+        };
 
         if let Some(value) = snapshot.memtable.get(_key) {
             if value.is_empty() {
@@ -387,17 +389,23 @@ impl LsmStorageInner {
             }
         }
 
-        let mut iters_l1 = Vec::new();
-        for sst in snapshot.levels[0].1.iter() {
-            let table = snapshot.sstables.get(sst).unwrap();
-            if filter_table(key.raw_ref(), table) {
-                iters_l1.push(table.clone());
+        let mut iters_level = Vec::new();
+        for (cur, level) in &snapshot.levels {
+            let mut ssts = Vec::new();
+            for sst in level.iter() {
+                let table = snapshot.sstables.get(sst).unwrap();
+                if filter_table(key.raw_ref(), table) {
+                    ssts.push(table.clone());
+                }
             }
+            iters_level.push(Box::new(SstConcatIterator::create_and_seek_to_key(
+                ssts, key,
+            )?));
         }
 
         let iter_l0: MergeIterator<SsTableIterator> = MergeIterator::create(iters_l0);
-        let iter_l1 = SstConcatIterator::create_and_seek_to_key(iters_l1, key)?;
-        let iter = TwoMergeIterator::create(iter_l0, iter_l1)?;
+        let iter_level = MergeIterator::create(iters_level);
+        let iter = TwoMergeIterator::create(iter_l0, iter_level)?;
         if iter.is_valid() && iter.key() == key && !iter.value().is_empty() {
             return Ok(Some(Bytes::copy_from_slice(iter.value())));
         }
@@ -495,6 +503,7 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
+        let state_lock = self.state_lock.lock();
         let flush_memtable;
         {
             let guard = self.state.read();
@@ -578,23 +587,35 @@ impl LsmStorageInner {
             }
         }
 
-        let mut iters_l1 = Vec::new();
-        for sst in snapshot.levels[0].1.iter() {
-            let table = snapshot.sstables.get(sst).unwrap().clone();
-            if range_overlap(
-                _lower,
-                _upper,
-                table.first_key().raw_ref(),
-                table.last_key().raw_ref(),
-            ) {
-                iters_l1.push(table.clone());
+        let mut iters_level = Vec::new();
+        for (_, level) in &snapshot.levels {
+            let mut ssts = Vec::new();
+            for sst in level.iter() {
+                ssts.push(snapshot.sstables.get(sst).unwrap().clone());
             }
+            let iter = match _lower {
+                Bound::Included(key) => {
+                    SstConcatIterator::create_and_seek_to_key(ssts, KeySlice::from_slice(key))?
+                }
+
+                Bound::Excluded(key) => {
+                    let mut iter =
+                        SstConcatIterator::create_and_seek_to_key(ssts, KeySlice::from_slice(key))?;
+                    if iter.is_valid() && iter.key() == KeySlice::from_slice(key) {
+                        iter.next()?;
+                    }
+                    iter
+                }
+
+                Bound::Unbounded => SstConcatIterator::create_and_seek_to_first(ssts)?,
+            };
+            iters_level.push(Box::new(iter));
         }
 
         let iter_l0 = MergeIterator::create(iters_l0);
         let iter = TwoMergeIterator::create(memtable_iter, iter_l0)?;
-        let iter_l1 = SstConcatIterator::create_and_seek_to_first(iters_l1)?;
-        let iter = TwoMergeIterator::create(iter, iter_l1)?;
+        let iter_level = MergeIterator::create(iters_level);
+        let iter = TwoMergeIterator::create(iter, iter_level)?;
 
         Ok(FusedIterator::new(LsmIterator::new(
             iter,

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::lsm_storage::LsmStorageState;
 
@@ -49,7 +50,30 @@ impl SimpleLeveledCompactionController {
         &self,
         _snapshot: &LsmStorageState,
     ) -> Option<SimpleLeveledCompactionTask> {
-        unimplemented!()
+        if _snapshot.l0_sstables.len() >= self.options.level0_file_num_compaction_trigger {
+            return Some(SimpleLeveledCompactionTask {
+                upper_level: None,
+                upper_level_sst_ids: _snapshot.l0_sstables.clone(),
+                lower_level: 1,
+                lower_level_sst_ids: _snapshot.levels[0].1.clone(),
+                is_lower_level_bottom_level: false,
+            });
+        }
+        for i in 1..self.options.max_levels {
+            let upper_level_size = _snapshot.levels[i - 1].1.len() as f64;
+            let lower_level_size = _snapshot.levels[i].1.len() as f64;
+            let size_ratio_level = lower_level_size / upper_level_size;
+            if size_ratio_level < self.options.size_ratio_percent as f64 / 100.0 {
+                return Some(SimpleLeveledCompactionTask {
+                    upper_level: Some(i),
+                    upper_level_sst_ids: _snapshot.levels[i - 1].1.clone(),
+                    lower_level: i + 1,
+                    lower_level_sst_ids: _snapshot.levels[i].1.clone(),
+                    is_lower_level_bottom_level: i + 1 == self.options.max_levels,
+                });
+            }
+        }
+        None
     }
 
     /// Apply the compaction result.
@@ -65,6 +89,39 @@ impl SimpleLeveledCompactionController {
         _task: &SimpleLeveledCompactionTask,
         _output: &[usize],
     ) -> (LsmStorageState, Vec<usize>) {
-        unimplemented!()
+        println!("apply_compaction_result114514");
+        let mut snapshot = _snapshot.clone();
+        // 被删除的SST
+        let mut files_to_remove = Vec::new();
+        if let Some(upper_level) = _task.upper_level {
+            assert_eq!(
+                _task.upper_level_sst_ids,
+                snapshot.levels[upper_level - 1].1,
+                "sst mismatched"
+            );
+            files_to_remove.extend(&snapshot.levels[upper_level - 1].1);
+            snapshot.levels[upper_level - 1].1.clear();
+        } else {
+            files_to_remove.extend(_task.upper_level_sst_ids.iter());
+            let mut l0_ssts_compacted = _task
+                .upper_level_sst_ids
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>();
+            let new_l0_ssts = snapshot
+                .l0_sstables
+                .iter()
+                .filter(|sst| !l0_ssts_compacted.remove(sst))
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(l0_ssts_compacted.is_empty());
+            snapshot.l0_sstables = new_l0_ssts;
+        }
+
+        files_to_remove.extend(&snapshot.levels[_task.lower_level - 1].1);
+        // 把新的sst_id放进compaction成功后的位置
+        snapshot.levels[_task.lower_level - 1].1 = _output.to_vec();
+
+        (snapshot, files_to_remove)
     }
 }
