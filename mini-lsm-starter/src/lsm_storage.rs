@@ -15,6 +15,7 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -25,9 +26,12 @@ use crate::iterators::concat_iterator::SstConcatIterator;
 use crate::iterators::two_merge_iterator::TwoMergeIterator;
 use crate::iterators::StorageIterator;
 use crate::key::KeySlice;
+use crate::manifest::ManifestRecord;
+use crate::table::FileObject;
 use anyhow::Result;
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
+use std::fs::File;
 
 use crate::block::Block;
 use crate::compact::{
@@ -174,7 +178,42 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        self.inner.sync_dir()?;
+        // 发送信号给线程退出loop
+        self.compaction_notifier.send(()).ok();
+        self.flush_notifier.send(()).ok();
+        let mut compaction_thread = self.compaction_thread.lock();
+        if let Some(compaction_thread) = compaction_thread.take() {
+            compaction_thread
+                .join()
+                .map_err(|e| anyhow::anyhow!("compaction thread panicked: {:?}", e))?;
+        }
+        let mut flush_thread = self.flush_thread.lock();
+        if let Some(flush_thread) = flush_thread.take() {
+            flush_thread
+                .join()
+                .map_err(|e| anyhow::anyhow!("flush thread panicked: {:?}", e))?;
+        }
+
+        // 先把mem变成imm
+        if !self.inner.state.read().memtable.is_empty() {
+            self.inner
+                .freeze_memtable_with_memtable(Arc::new(MemTable::create(
+                    self.inner.next_sst_id(),
+                )))?;
+        }
+
+        // 然后把所有imm刷盘
+        while {
+            let snapshot = self.inner.state.read();
+            !snapshot.imm_memtables.is_empty()
+        } {
+            self.inner.force_flush_next_imm_memtable()?;
+        }
+
+        self.inner.sync_dir()?;
+
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -295,13 +334,16 @@ impl LsmStorageInner {
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
     /// not exist.
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
+        let mut state = LsmStorageState::create(&options);
         let path = path.as_ref();
 
         if !path.exists() {
             std::fs::create_dir(path)?;
         }
 
-        let state = LsmStorageState::create(&options);
+        let mut next_sst_id = 1;
+        let manifest;
+        let block_cache = Arc::new(BlockCache::new(1 << 20));
 
         let compaction_controller = match &options.compaction_options {
             CompactionOptions::Leveled(options) => {
@@ -316,18 +358,86 @@ impl LsmStorageInner {
             CompactionOptions::NoCompaction => CompactionController::NoCompaction,
         };
 
+        if !path.exists() {
+            std::fs::create_dir_all(path)?;
+        }
+
+        let manifest_path = path.join("MANIFEST");
+        if !manifest_path.exists() {
+            manifest = Manifest::create(&manifest_path)?;
+        } else {
+            let (m, records) = Manifest::recover(&manifest_path)?;
+            for record in records {
+                match record {
+                    ManifestRecord::Flush(sst_id) => {
+                        if compaction_controller.flush_to_l0() {
+                            state.l0_sstables.insert(0, sst_id);
+                        } else {
+                            state.levels.insert(0, (sst_id, vec![sst_id]));
+                        }
+                        next_sst_id = next_sst_id.max(sst_id);
+                    }
+
+                    ManifestRecord::NewMemtable(sst_id) => {}
+
+                    ManifestRecord::Compaction(task, output) => {
+                        let (new_state, _) = compaction_controller
+                            .apply_compaction_result(&state, &task, &output, true);
+                        state = new_state;
+                        next_sst_id =
+                            next_sst_id.max(output.iter().copied().max().unwrap_or_default());
+                    }
+                }
+            }
+            // 将恢复的sst索引插入sstable里
+            for sst_id in state
+                .l0_sstables
+                .iter()
+                .chain(state.levels.iter().map(|(_, file)| file).flatten())
+            {
+                let table_id = *sst_id;
+                let sst = SsTable::open(
+                    table_id,
+                    Some(block_cache.clone()),
+                    FileObject::open(&Self::path_of_sst_static(path, table_id))?,
+                )?;
+                state.sstables.insert(table_id, Arc::new(sst));
+            }
+
+            if let CompactionOptions::Leveled(options) = &options.compaction_options {
+                for (id, level) in &mut state.levels {
+                    level.sort_by(|a, b| {
+                        state
+                            .sstables
+                            .get(a)
+                            .unwrap()
+                            .first_key()
+                            .cmp(state.sstables.get(b).unwrap().first_key())
+                    });
+                }
+            }
+
+            // 新建一个memtable
+            next_sst_id += 1;
+            state.memtable = Arc::new(MemTable::create(next_sst_id));
+            next_sst_id += 1;
+            manifest = m;
+        }
+
         let storage = Self {
             state: Arc::new(RwLock::new(Arc::new(state))),
             state_lock: Mutex::new(()),
             path: path.to_path_buf(),
-            block_cache: Arc::new(BlockCache::new(1024)),
-            next_sst_id: AtomicUsize::new(1),
+            block_cache: block_cache,
+            next_sst_id: AtomicUsize::new(next_sst_id),
             compaction_controller,
-            manifest: None,
+            manifest: Some(manifest),
             options: options.into(),
             mvcc: None,
             compaction_filters: Arc::new(Mutex::new(Vec::new())),
         };
+
+        storage.sync_dir()?;
 
         Ok(storage)
     }
@@ -480,24 +590,28 @@ impl LsmStorageInner {
         Self::path_of_wal_static(&self.path, id)
     }
 
+    // 将一个mem变成imm
+    fn freeze_memtable_with_memtable(&self, memtable: Arc<MemTable>) -> Result<()> {
+        let mut guard = self.state.write();
+        let mut snapshot = guard.as_ref().clone();
+        let old_memtable = std::mem::replace(&mut snapshot.memtable, memtable);
+        snapshot.imm_memtables.insert(0, old_memtable.clone());
+        *guard = Arc::new(snapshot);
+        Ok(())
+    }
+
     pub(super) fn sync_dir(&self) -> Result<()> {
-        unimplemented!()
+        File::open(&self.path)?.sync_all()?;
+        Ok(())
     }
 
     /// Force freeze the current memtable to an immutable memtable
+    /// 新建一个memtable并将老的刷成imm
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
         let next_memtable_id = self.next_sst_id();
         let memtable = Arc::new(MemTable::create(next_memtable_id));
 
-        let old_memtable;
-        {
-            let mut guard = self.state.write();
-            let mut snapshot = guard.as_ref().clone();
-            old_memtable = std::mem::replace(&mut snapshot.memtable, memtable);
-            snapshot.imm_memtables.insert(0, old_memtable.clone());
-            *guard = Arc::new(snapshot);
-        }
-
+        self.freeze_memtable_with_memtable(memtable)?;
         Ok(())
     }
 
@@ -536,6 +650,12 @@ impl LsmStorageInner {
             snapshot.sstables.insert(sst_id, Arc::new(sst));
             *guard = Arc::new(snapshot);
         }
+
+        self.sync_dir()?;
+        self.manifest
+            .as_ref()
+            .unwrap()
+            .add_record(&state_lock, ManifestRecord::Flush(sst_id))?;
 
         Ok(())
     }

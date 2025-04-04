@@ -20,6 +20,7 @@ mod simple_leveled;
 mod tiered;
 
 use crate::key::KeySlice;
+use crate::manifest::ManifestRecord;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -421,6 +422,12 @@ impl LsmStorageInner {
             let mut state = self.state.write();
             *state = Arc::new(snapshot);
             drop(state);
+            // 将compact操作写入manifest
+            // self.sync_dir()?;
+            self.manifest
+                .as_ref()
+                .unwrap()
+                .add_record(&_state_lock, ManifestRecord::Compaction(task, output))?;
             ssts_to_remove
         };
 

@@ -204,15 +204,18 @@ impl LeveledCompactionController {
                 new_lower_level_ssts.push(sst.clone());
             }
         }
+        // 如果不在恢复模式下，则需要对sst进行排序，因为恢复模式下，sst还没被插入
         new_lower_level_ssts.extend(_output);
-        new_lower_level_ssts.sort_by(|a, b| {
-            _snapshot
-                .sstables
-                .get(a)
-                .unwrap()
-                .first_key()
-                .cmp(snapshot.sstables.get(b).unwrap().first_key())
-        });
+        if !_in_recovery {
+            new_lower_level_ssts.sort_by(|a, b| {
+                _snapshot
+                    .sstables
+                    .get(a)
+                    .unwrap()
+                    .first_key()
+                    .cmp(snapshot.sstables.get(b).unwrap().first_key())
+            });
+        }
 
         snapshot.levels[_task.lower_level - 1].1 = new_lower_level_ssts;
 
