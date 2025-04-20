@@ -26,7 +26,7 @@ use std::sync::Arc;
 pub(crate) const SIZEOF_U16: usize = std::mem::size_of::<u16>();
 pub(crate) const SIZEOF_U32: usize = std::mem::size_of::<u32>();
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 pub use builder::SsTableBuilder;
 pub use iterator::SsTableIterator;
 
@@ -65,7 +65,10 @@ impl BlockMeta {
             estimated_size += SIZEOF_U16;
             estimated_size += meta.last_key.len();
         }
+        estimated_size += SIZEOF_U32 * 2;
         buf.reserve(estimated_size);
+        buf.put_u32(block_meta.len() as u32);
+        let origin_len = buf.len();
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
             buf.put_u16(meta.first_key.len() as u16);
@@ -73,12 +76,16 @@ impl BlockMeta {
             buf.put_u16(meta.last_key.len() as u16);
             buf.put_slice(meta.last_key.raw_ref());
         }
+        let checksum = crc32fast::hash(&buf[origin_len..]);
+        buf.put_u32(checksum);
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> Result<Vec<BlockMeta>> {
         let mut block_meta = Vec::new();
-        while buf.remaining() > 0 {
+        let num = buf.get_u32() as usize;
+        let checksum = crc32fast::hash(&buf[..buf.remaining() - 4]);
+        for _ in 0..num {
             let offset = buf.get_u32() as usize;
             let first_key_len = buf.get_u16() as usize;
             let first_key = buf.copy_to_bytes(first_key_len);
@@ -90,7 +97,10 @@ impl BlockMeta {
                 last_key: KeyBytes::from_bytes(last_key),
             });
         }
-        block_meta
+        if checksum != buf.get_u32() {
+            bail!("CRC校验失败 block_meta文件损坏");
+        }
+        Ok(block_meta)
     }
 }
 
@@ -168,7 +178,7 @@ impl SsTable {
             (bloom_filter_offset as u64) - (block_meta_offset as u64) - 4,
         )?;
         let bloom_filter = Bloom::decode(&raw_bloom[..]);
-        let block_meta = BlockMeta::decode_block_meta(&raw_block_meta[..]);
+        let block_meta = BlockMeta::decode_block_meta(&raw_block_meta[..])?;
 
         Ok(Self {
             file: file,
@@ -210,10 +220,16 @@ impl SsTable {
             .block_meta
             .get(block_idx + 1)
             .map_or(self.block_meta_offset, |x| x.offset) as u64;
-        let data = self
+        let block_data_with_checksum = self
             .file
             .read(block_offset as u64, block_next_offset - block_offset)?;
-        Ok(Arc::new(Block::decode(&data[..])))
+        let block_len = (block_next_offset - block_offset - 4) as usize;
+        let block_data = &block_data_with_checksum[..block_len];
+        let checksum = (&block_data_with_checksum[block_len..]).get_u32();
+        if crc32fast::hash(block_data) != checksum {
+            bail!("CRC校验失败 block文件损坏");
+        }
+        Ok(Arc::new(Block::decode(&block_data[..])))
     }
 
     /// Read a block from disk, with block cache. (Day 4)

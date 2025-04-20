@@ -15,7 +15,8 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+use bytes::{Buf, BufMut};
 use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
@@ -58,8 +59,17 @@ impl Manifest {
         file.read_to_end(&mut buf)?;
         let mut stream = Deserializer::from_slice(&buf).into_iter::<ManifestRecord>();
         let mut records = Vec::new();
-        while let Some(x) = stream.next() {
-            records.push(x?);
+        let mut buf = buf.as_slice();
+        while buf.has_remaining() {
+            let len = buf.get_u64() as usize;
+            let slice = &buf[..len];
+            let json = serde_json::from_slice(slice)?;
+            buf.advance(len);
+            let checksum = buf.get_u32();
+            if checksum != crc32fast::hash(slice) {
+                bail!("CRC校验失败 manifest文件损坏");
+            }
+            records.push(json);
         }
 
         Ok((
@@ -82,7 +92,10 @@ impl Manifest {
     // 将新的变动序列化成json，然后追加写入manifest文件，并且强制刷新缓冲区
     pub fn add_record_when_init(&self, _record: ManifestRecord) -> Result<()> {
         let mut file = self.file.lock();
-        let buf = serde_json::to_vec(&_record)?;
+        let mut buf = serde_json::to_vec(&_record)?;
+        let hash = crc32fast::hash(&buf);
+        file.write_all(&(buf.len() as u64).to_be_bytes())?;
+        buf.put_u32(hash);
         file.write_all(&buf)?;
         // 写完强制刷盘
         file.sync_all()?;

@@ -565,7 +565,32 @@ impl LsmStorageInner {
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
     pub fn write_batch<T: AsRef<[u8]>>(&self, _batch: &[WriteBatchRecord<T>]) -> Result<()> {
-        unimplemented!()
+        for record in _batch {
+            match record {
+                WriteBatchRecord::Put(key, value) => {
+                    let key = key.as_ref();
+                    let value = value.as_ref();
+                    let size;
+                    {
+                        let guard = self.state.read();
+                        guard.memtable.put(key, value)?;
+                        size = guard.memtable.approximate_size();
+                    }
+                    self.try_freeze(size)?;
+                }
+                WriteBatchRecord::Del(key) => {
+                    let key = key.as_ref();
+                    let size;
+                    {
+                        let guard = self.state.read();
+                        guard.memtable.put(key, b"")?;
+                        size = guard.memtable.approximate_size();
+                    }
+                    self.try_freeze(size)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn try_freeze(&self, estimated_size: usize) -> Result<()> {
@@ -585,32 +610,14 @@ impl LsmStorageInner {
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
         assert!(!_key.is_empty(), "key不能为空");
         assert!(!_value.is_empty(), "value不能为空");
-
-        let size;
-        {
-            let guard = self.state.read();
-            guard.memtable.put(_key, _value)?;
-            size = guard.memtable.approximate_size();
-        }
-
-        self.try_freeze(size)?;
-
+        self.write_batch(&[WriteBatchRecord::Put(_key, _value)])?;
         Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
         assert!(!_key.is_empty(), "key不能为空");
-
-        let size;
-        {
-            let guard = self.state.read();
-            guard.memtable.put(_key, b"")?;
-            size = guard.memtable.approximate_size();
-        }
-
-        self.try_freeze(size)?;
-
+        self.write_batch(&[WriteBatchRecord::Del(_key)])?;
         Ok(())
     }
 

@@ -21,10 +21,11 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use bytes::{Buf, BufMut, Bytes};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
+use std::hash::Hasher;
 
 pub struct Wal {
     file: Arc<Mutex<BufWriter<File>>>,
@@ -49,12 +50,21 @@ impl Wal {
         file.read_to_end(&mut buf)?;
         let mut buf_u8 = buf.as_slice();
         while buf_u8.has_remaining() {
+            let mut hasher = crc32fast::Hasher::new();
             let key_len = buf_u8.get_u16() as usize;
+            hasher.write_u16(key_len as u16);
             let key = Bytes::copy_from_slice(&buf_u8[..key_len]);
+            hasher.write(&key);
             buf_u8.advance(key_len);
             let value_len = buf_u8.get_u16() as usize;
+            hasher.write_u16(value_len as u16);
             let value = Bytes::copy_from_slice(&buf_u8[..value_len]);
+            hasher.write(&value);
             buf_u8.advance(value_len);
+            let crc = hasher.finalize();
+            if crc != buf_u8.get_u32() {
+                bail!(anyhow::anyhow!("CRC校验失败 wal文件损坏"));
+            }
             _skiplist.insert(key, value);
         }
 
@@ -68,10 +78,17 @@ impl Wal {
         let key_len = _key.len() as u16;
         let value_len = _value.len() as u16;
         let mut buf: Vec<u8> = Vec::new();
+        let mut hasher = crc32fast::Hasher::new();
         buf.put_u16(key_len);
+        hasher.write_u16(key_len);
         buf.extend(_key);
+        hasher.write(_key);
         buf.put_u16(value_len);
+        hasher.write_u16(value_len);
         buf.extend(_value);
+        hasher.write(_value);
+        let crc = hasher.finalize();
+        buf.put_u32(crc);
         file.write_all(&buf)?;
         Ok(())
     }

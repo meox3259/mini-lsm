@@ -111,13 +111,13 @@ impl MemTable {
     /// In week 3, day 5, modify the function to use the batch API.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
         let estimated_size = _key.len() + _value.len();
+        if let Some(wal) = &self.wal {
+            wal.put(_key, _value)?;
+        }
         self.map
             .insert(Bytes::copy_from_slice(_key), Bytes::copy_from_slice(_value));
         self.approximate_size
             .fetch_add(estimated_size, std::sync::atomic::Ordering::Relaxed);
-        if let Some(wal) = &self.wal {
-            wal.put(_key, _value)?;
-        }
         Ok(())
     }
 
