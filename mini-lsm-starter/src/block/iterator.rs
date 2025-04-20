@@ -22,7 +22,7 @@ use bytes::Buf;
 
 use crate::key::{KeySlice, KeyVec};
 
-use super::{Block, SIZEOF_U16};
+use super::{Block, SIZEOF_U16, SIZEOF_U64};
 
 /// Iterates on a block.
 pub struct BlockIterator {
@@ -39,12 +39,13 @@ pub struct BlockIterator {
 }
 
 impl Block {
-    pub fn first_key(&self) -> Vec<u8> {
+    pub fn first_key(&self) -> KeyVec {
         let mut buf = &self.data[..];
         buf.get_u16();
         let key_len = buf.get_u16() as usize;
         let key = &buf[..key_len];
-        key.to_vec()
+        buf.advance(key_len);
+        KeyVec::from_vec_with_ts(key.to_vec(), buf.get_u64())
     }
 }
 
@@ -110,16 +111,21 @@ impl BlockIterator {
         let overlap = entry.get_u16() as usize;
         let key_len = entry.get_u16() as usize;
         let key = &entry[..key_len];
+
+        self.key.clear();
+        self.key
+            .append(&self.block.first_key().key_ref()[..overlap]);
+        self.key.append(key);
         entry.advance(key_len);
-        let key_overlap = &self.block.first_key()[..overlap];
+
+        let ts = entry.get_u64();
+        self.key.set_ts(ts);
         let value_len = entry.get_u16() as usize;
         let value = &entry[..value_len];
-        self.key.clear();
-        self.key.append(key_overlap);
-        self.key.append(key);
+
         self.value_range = (
-            offset + SIZEOF_U16 + key_len + SIZEOF_U16 + SIZEOF_U16,
-            offset + SIZEOF_U16 + key_len + SIZEOF_U16 + value_len + SIZEOF_U16,
+            offset + SIZEOF_U16 + key_len + SIZEOF_U16 + SIZEOF_U16 + SIZEOF_U64,
+            offset + SIZEOF_U16 + key_len + SIZEOF_U16 + value_len + SIZEOF_U16 + SIZEOF_U64,
         );
     }
 

@@ -61,9 +61,9 @@ impl BlockMeta {
         for meta in block_meta {
             estimated_size += SIZEOF_U32;
             estimated_size += SIZEOF_U16;
-            estimated_size += meta.first_key.len();
+            estimated_size += meta.first_key.raw_len();
             estimated_size += SIZEOF_U16;
-            estimated_size += meta.last_key.len();
+            estimated_size += meta.last_key.raw_len();
         }
         estimated_size += SIZEOF_U32 * 2;
         buf.reserve(estimated_size);
@@ -71,10 +71,12 @@ impl BlockMeta {
         let origin_len = buf.len();
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
-            buf.put_u16(meta.first_key.len() as u16);
-            buf.put_slice(meta.first_key.raw_ref());
-            buf.put_u16(meta.last_key.len() as u16);
-            buf.put_slice(meta.last_key.raw_ref());
+            buf.put_u16(meta.first_key.key_len() as u16);
+            buf.put_slice(meta.first_key.key_ref());
+            buf.put_u64(meta.first_key.ts());
+            buf.put_u16(meta.last_key.key_len() as u16);
+            buf.put_slice(meta.last_key.key_ref());
+            buf.put_u64(meta.last_key.ts());
         }
         let checksum = crc32fast::hash(&buf[origin_len..]);
         buf.put_u32(checksum);
@@ -88,13 +90,15 @@ impl BlockMeta {
         for _ in 0..num {
             let offset = buf.get_u32() as usize;
             let first_key_len = buf.get_u16() as usize;
-            let first_key = buf.copy_to_bytes(first_key_len);
+            let first_key =
+                KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(first_key_len), buf.get_u64());
             let last_key_len = buf.get_u16() as usize;
-            let last_key = buf.copy_to_bytes(last_key_len);
+            let last_key =
+                KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(last_key_len), buf.get_u64());
             block_meta.push(BlockMeta {
                 offset: offset,
-                first_key: KeyBytes::from_bytes(first_key),
-                last_key: KeyBytes::from_bytes(last_key),
+                first_key: first_key,
+                last_key: last_key,
             });
         }
         if checksum != buf.get_u32() {

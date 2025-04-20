@@ -63,17 +63,19 @@ impl BlockBuilder {
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
-        if self.estimated_size() + key.len() + value.len() + size_of::<u16>() * 3 > self.block_size
+        if self.estimated_size() + key.raw_len() + value.len() + size_of::<u16>() * 3
+            > self.block_size
             && !self.is_empty()
         {
             return false;
         }
         self.offsets.push(self.data.len() as u16);
-        let overlap = compute_overlap(self.first_key.raw_ref(), key.raw_ref());
+        let overlap = compute_overlap(self.first_key.key_ref(), key.key_ref());
         self.data.put_u16(overlap as u16);
-        self.data.put_u16((key.len() - overlap) as u16);
-        let _key = key.raw_ref();
+        self.data.put_u16((key.key_len() - overlap) as u16);
+        let _key = key.key_ref();
         self.data.put(&_key[overlap..]);
+        self.data.put_u64(key.ts());
         self.data.put_u16(value.len() as u16);
         self.data.put(value);
 

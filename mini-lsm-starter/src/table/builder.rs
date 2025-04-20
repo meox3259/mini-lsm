@@ -56,23 +56,23 @@ impl SsTableBuilder {
     /// Note: You should split a new block when the current block is full.(`std::mem::replace` may
     /// be helpful here)
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
-        self.key_hashes.push(farmhash::fingerprint32(key.raw_ref()));
+        self.key_hashes.push(farmhash::fingerprint32(key.key_ref()));
         if self.first_key.is_empty() {
             self.first_key.clear();
-            self.first_key.extend(key.raw_ref());
+            self.first_key.extend(key.key_ref());
         }
         if self.builder.add(key, value) {
             self.last_key.clear();
-            self.last_key.extend(key.raw_ref());
+            self.last_key.extend(key.key_ref());
             return;
         }
 
         self.finish_block();
         self.builder.add(key, value);
         self.first_key.clear();
-        self.first_key.extend(key.raw_ref());
+        self.first_key.extend(key.key_ref());
         self.last_key.clear();
-        self.last_key.extend(key.raw_ref());
+        self.last_key.extend(key.key_ref());
     }
 
     fn finish_block(&mut self) {
